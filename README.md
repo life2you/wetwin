@@ -33,6 +33,8 @@ brew tap life2you/tap
 brew install life2you/tap/wetwin
 ```
 
+Maintainer release steps live in [RELEASING.md](/Users/life2you/vibeCodes/github/wetwin/RELEASING.md).
+
 ### Build from source
 
 ```bash

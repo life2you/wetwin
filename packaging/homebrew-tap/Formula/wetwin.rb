@@ -1,14 +1,23 @@
 class Wetwin < Formula
   desc "Lightweight macOS WeChat multi-instance manager with a terminal UI"
   homepage "https://github.com/life2you/wetwin"
-  url "https://github.com/life2you/wetwin/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "9f30d8e641450ab0e08213ae75bf27530cad5e152d648c9822a43ccec533f21b"
+  version "0.1.0"
   license "MIT"
 
-  depends_on "rust" => :build
+  on_macos do
+    on_arm do
+      url "https://github.com/life2you/wetwin/releases/download/v0.1.0/wetwin-aarch64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_ARM64_SHA256"
+    end
+
+    on_intel do
+      url "https://github.com/life2you/wetwin/releases/download/v0.1.0/wetwin-x86_64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_X64_SHA256"
+    end
+  end
 
   def install
-    system "cargo", "install", *std_cargo_args(path: ".")
+    bin.install "wetwin"
   end
 
   test do
