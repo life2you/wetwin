@@ -77,7 +77,20 @@ pub fn list_instances(language: Language) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+#[allow(dead_code)]
 pub fn create_instance(language: Language, index: u16, force: bool) -> Result<String> {
+    create_instance_with_progress(language, index, force, |_, _, _| {})
+}
+
+pub fn create_instance_with_progress<F>(
+    language: Language,
+    index: u16,
+    force: bool,
+    mut report: F,
+) -> Result<String>
+where
+    F: FnMut(usize, usize, &str),
+{
     ensure_valid_copy_index(index)?;
     let mut lines = Vec::new();
 
@@ -88,28 +101,35 @@ pub fn create_instance(language: Language, index: u16, force: bool) -> Result<St
         bail!("{}", language.source_not_found());
     }
 
-    if target.exists() {
+    let target_exists = target.exists();
+    if target_exists {
         if !force {
             bail!("{}", language.target_exists(&target.display().to_string()));
         }
-
-        lines.push(format!(
-            "{} {}",
-            language.removing_existing_copy(),
-            target.display()
-        ));
-        remove_app_at_path(language, &target)?;
     }
 
     let source_str = source.display().to_string();
     let target_str = target.display().to_string();
+    let total_steps = if target_exists && force { 7 } else { 6 };
+    let mut current_step = 0usize;
 
-    lines.push(format!(
+    if target_exists && force {
+        let removal_message = format!("{} {}", language.removing_existing_copy(), target.display());
+        current_step += 1;
+        report(current_step, total_steps, &removal_message);
+        lines.push(removal_message);
+        remove_app_at_path(language, &target)?;
+    }
+
+    let copy_message = format!(
         "{} {} -> {}",
         language.copying(),
         source.display(),
         target.display()
-    ));
+    );
+    current_step += 1;
+    report(current_step, total_steps, &copy_message);
+    lines.push(copy_message);
     error::run_command_with_privilege_fallback("cp", &["-R", &source_str, &target_str])
         .with_context(|| {
             format!(
@@ -128,10 +148,16 @@ pub fn create_instance(language: Language, index: u16, force: bool) -> Result<St
     }
 
     let bundle_id = bundle_id_for_index(index);
-    lines.push(language.updating_bundle_id(&bundle_id));
+    let update_bundle_id_message = language.updating_bundle_id(&bundle_id);
+    current_step += 1;
+    report(current_step, total_steps, &update_bundle_id_message);
+    lines.push(update_bundle_id_message);
     plist::set_bundle_identifier(&target_plist, &bundle_id)?;
 
-    lines.push(language.copying_preferences().to_string());
+    let copy_prefs_message = language.copying_preferences().to_string();
+    current_step += 1;
+    report(current_step, total_steps, &copy_prefs_message);
+    lines.push(copy_prefs_message);
     match prefs::copy_original_preferences(language, &bundle_id) {
         Ok(prefs::CopyPrefsOutcome::Copied) => {
             lines.push(language.preferences_copied().to_string());
@@ -144,14 +170,23 @@ pub fn create_instance(language: Language, index: u16, force: bool) -> Result<St
         }
     }
 
-    lines.push(language.applying_language_preference().to_string());
+    let apply_language_message = language.applying_language_preference().to_string();
+    current_step += 1;
+    report(current_step, total_steps, &apply_language_message);
+    lines.push(apply_language_message);
     prefs::apply_explicit_language(language, &bundle_id)?;
     lines.push(language.language_preference_applied().to_string());
 
-    lines.push(language.clearing_quarantine().to_string());
+    let clear_quarantine_message = language.clearing_quarantine().to_string();
+    current_step += 1;
+    report(current_step, total_steps, &clear_quarantine_message);
+    lines.push(clear_quarantine_message);
     sign::clear_quarantine(&target)?;
 
-    lines.push(language.signing().to_string());
+    let sign_message = language.signing().to_string();
+    current_step += 1;
+    report(current_step, total_steps, &sign_message);
+    lines.push(sign_message);
     sign::ad_hoc_sign(&target)?;
 
     lines.push(format!(
@@ -269,22 +304,31 @@ pub fn scan_copies() -> Result<Vec<AppInstance>> {
     Ok(copies)
 }
 
-pub fn suggested_available_indices(limit: usize) -> Result<Vec<u16>> {
+pub fn suggested_available_indices_from(start_index: u16, count: usize) -> Result<Vec<u16>> {
     let existing = scan_copies()?;
-    let mut next_index = 2u16;
+    let mut next_index = start_index.max(2);
     let mut result = Vec::new();
 
-    while result.len() < limit {
+    while result.len() < count {
         if existing.iter().all(|instance| instance.index != next_index) {
             result.push(next_index);
         }
-        next_index = next_index.saturating_add(1);
+
         if next_index == u16::MAX {
             break;
         }
+
+        next_index = next_index.saturating_add(1);
     }
 
     Ok(result)
+}
+
+pub fn next_available_index_from(start_index: u16) -> Result<u16> {
+    suggested_available_indices_from(start_index, 1)?
+        .into_iter()
+        .next()
+        .context("No available copy index could be determined.")
 }
 
 pub fn app_path(index: u16) -> PathBuf {

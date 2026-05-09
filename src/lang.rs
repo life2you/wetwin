@@ -747,6 +747,13 @@ impl Language {
         }
     }
 
+    pub fn tui_create_prompt(self, path: &str) -> String {
+        match self {
+            Self::En => format!("Create this WeChat copy now? [{path}]"),
+            Self::Zh => format!("确认立即创建这个微信副本吗？ [{path}]"),
+        }
+    }
+
     pub fn tui_open_select_help(self) -> &'static str {
         match self {
             Self::En => "Use Up/Down to choose a copy, Enter to open, Esc to cancel",
@@ -779,6 +786,48 @@ impl Language {
         match self {
             Self::En => "Left/Right or Up/Down to choose, Enter to confirm, Esc to cancel",
             Self::Zh => "使用左右键或上下键选择，回车确认，Esc 取消",
+        }
+    }
+
+    pub fn creation_cancelled(self) -> &'static str {
+        match self {
+            Self::En => "Copy creation was cancelled.",
+            Self::Zh => "已取消创建副本。",
+        }
+    }
+
+    pub fn tui_progress_title(self) -> &'static str {
+        match self {
+            Self::En => "Working",
+            Self::Zh => "正在处理",
+        }
+    }
+
+    pub fn tui_progress_help(self) -> &'static str {
+        match self {
+            Self::En => "Please wait while wetwin completes the operation.",
+            Self::Zh => "wetwin 正在执行操作，请稍候。",
+        }
+    }
+
+    pub fn tui_progress_starting(self, index: u16) -> String {
+        match self {
+            Self::En => format!("Preparing WeChat{index}.app"),
+            Self::Zh => format!("正在准备 WeChat{index}.app"),
+        }
+    }
+
+    pub fn tui_background_disconnected(self) -> &'static str {
+        match self {
+            Self::En => "The background task ended unexpectedly.",
+            Self::Zh => "后台任务意外中断。",
+        }
+    }
+
+    pub fn tui_next_index_save_failed(self, details: &str) -> String {
+        match self {
+            Self::En => format!("Copy created, but updating the next copy index failed: {details}"),
+            Self::Zh => format!("副本已创建，但更新下一个副本编号失败：{details}"),
         }
     }
 

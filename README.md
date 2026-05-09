@@ -2,7 +2,7 @@
 
 A lightweight macOS WeChat multi-instance manager written in Rust.
 
-`wetwin` helps you create, launch, list, and remove local WeChat app copies by copying `WeChat.app`, changing the Bundle Identifier, clearing quarantine attributes, and re-signing the app locally.
+`wetwin` helps you create, launch, inspect, and remove local WeChat app copies by copying `WeChat.app`, changing the Bundle Identifier, clearing quarantine attributes, and re-signing the app locally.
 
 When an operation inside `/Applications` needs elevated privileges, `wetwin` first tries it normally and then falls back to a native macOS administrator permission prompt.
 
@@ -25,6 +25,13 @@ When an operation inside `/Applications` needs elevated privileges, `wetwin` fir
 - No account or credential management
 
 ## Installation
+
+### Homebrew
+
+```bash
+brew tap life2you/tap
+brew install wetwin
+```
 
 ### Build from source
 
@@ -49,92 +56,35 @@ cargo install --path .
 ## Usage
 
 ```bash
-wetwin list
-wetwin create 2
-wetwin create 2 --force
-wetwin open 2
-wetwin open all
-wetwin remove 2
-wetwin remove 2 --yes
-wetwin doctor
+wetwin
+wetwin --lang zh
+wetwin --lang en
 ```
 
-## Commands
+## TUI Flow
 
-### `wetwin list`
+Run `wetwin` to enter the terminal UI.
 
-- Checks whether `/Applications/WeChat.app` exists
-- Scans `/Applications` for `WeChat2.app`, `WeChat3.app`, `WeChat4.app`, and so on
-- Prints discovered app paths and Bundle Identifiers
+Inside the TUI you can:
 
-### `wetwin create <index>`
+- View the original WeChat app and all discovered copies
+- Create the next suggested copy with a confirmation step and progress bar
+- Open one copy or open all available apps
+- Remove a selected copy with a confirmation step
+- Run environment checks with `doctor`
+- Switch UI language and persist it in config
 
-Example:
+The first launch prompts for language selection and stores it at:
 
 ```bash
-wetwin create 2
+~/Library/Application Support/wetwin/config.toml
 ```
-
-What it does:
-
-1. Verifies `/Applications/WeChat.app` exists
-2. Creates `/Applications/WeChat{index}.app`
-3. Updates `CFBundleIdentifier` to `com.tencent.xinWeChat{index}`
-4. Clears quarantine attributes with `xattr -cr`
-5. Applies local ad-hoc signing with `codesign --force --deep --sign -`
-
-If the target already exists, use:
-
-```bash
-wetwin create 2 --force
-```
-
-### `wetwin open <target>`
-
-Examples:
-
-```bash
-wetwin open 2
-wetwin open all
-```
-
-- `wetwin open 2` launches `/Applications/WeChat2.app`
-- `wetwin open all` launches `/Applications/WeChat.app` and all discovered copies
-
-### `wetwin remove <index>`
-
-Example:
-
-```bash
-wetwin remove 2
-```
-
-- Only indices `>= 2` are allowed
-- The original `/Applications/WeChat.app` is never removed
-- A confirmation prompt is shown unless `--yes` is passed
-
-Skip confirmation:
-
-```bash
-wetwin remove 2 --yes
-```
-
-### `wetwin doctor`
-
-Checks:
-
-- Current platform is macOS
-- `/Applications/WeChat.app` exists
-- `/usr/libexec/PlistBuddy` exists
-- `xattr`, `codesign`, and `open` are available
-- `/Applications` is writable or may require `sudo`
-- Existing copies contain `Info.plist`
 
 ## How It Works
 
 `wetwin` only automates local app bundle operations. It does not inject into WeChat, change WeChat behavior, bypass login restrictions, manage accounts, or modify network traffic.
 
-The first version uses these local operations:
+The current version uses these local operations:
 
 ```bash
 cp -R /Applications/WeChat.app /Applications/WeChat2.app

@@ -10,28 +10,28 @@ use ratatui::{
     prelude::*,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
     DefaultTerminal,
 };
 use std::io::{self, IsTerminal};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 use std::time::Duration;
 
 const MENU_LEN: usize = 8;
-const CREATE_SLOT_COUNT: usize = 8;
 
 #[derive(Clone, Copy)]
 enum PendingAction {
-    CreateSelect,
+    CreateConfirm(u16),
     OpenSelect,
     RemoveSelect,
     LanguageSelect,
-    CreateForceConfirm(u16),
     RemoveConfirm(u16),
 }
 
 #[derive(Clone, Copy)]
 enum ConfirmAction {
-    CreateForce(u16),
+    Create(u16),
     Remove(u16),
 }
 
@@ -40,6 +40,23 @@ enum OutputTone {
     Normal,
     Success,
     Error,
+}
+
+enum BackgroundEvent {
+    Progress {
+        message: String,
+        current: usize,
+        total: usize,
+    },
+    Finished(std::result::Result<String, String>),
+}
+
+struct RunningOperation {
+    receiver: Receiver<BackgroundEvent>,
+    created_index: u16,
+    message: String,
+    current: usize,
+    total: usize,
 }
 
 pub fn run(language: Language, should_prompt_for_language: bool) -> Result<()> {
@@ -62,6 +79,7 @@ pub fn run(language: Language, should_prompt_for_language: bool) -> Result<()> {
 
 fn run_loop(terminal: &mut DefaultTerminal, mut app_state: AppState) -> Result<()> {
     loop {
+        app_state.poll_background();
         terminal.draw(|frame| draw(frame, &app_state))?;
 
         if !event::poll(Duration::from_millis(200))? {
@@ -89,8 +107,6 @@ struct AppState {
     output: String,
     output_tone: OutputTone,
     pending: Option<PendingAction>,
-    create_candidates: Vec<u16>,
-    create_selected: usize,
     open_candidates: Vec<app::AppInstance>,
     open_selected: usize,
     remove_candidates: Vec<app::AppInstance>,
@@ -98,6 +114,7 @@ struct AppState {
     confirm_action: Option<ConfirmAction>,
     confirm_selected: usize,
     language_selected: usize,
+    running: Option<RunningOperation>,
 }
 
 impl AppState {
@@ -113,8 +130,6 @@ impl AppState {
             } else {
                 None
             },
-            create_candidates: Vec::new(),
-            create_selected: 0,
             open_candidates: Vec::new(),
             open_selected: 0,
             remove_candidates: Vec::new(),
@@ -126,10 +141,15 @@ impl AppState {
             } else {
                 1
             },
+            running: None,
         }
     }
 
     fn handle_key(&mut self, code: KeyCode) -> Result<bool> {
+        if self.running.is_some() {
+            return Ok(false);
+        }
+
         if let Some(pending) = self.pending {
             return self.handle_pending_key(code, pending);
         }
@@ -156,45 +176,16 @@ impl AppState {
 
     fn handle_pending_key(&mut self, code: KeyCode, pending: PendingAction) -> Result<bool> {
         match pending {
-            PendingAction::CreateSelect => self.handle_create_select_key(code),
+            PendingAction::CreateConfirm(index) => {
+                self.handle_confirm_key(code, ConfirmAction::Create(index))
+            }
             PendingAction::OpenSelect => self.handle_open_select_key(code),
             PendingAction::RemoveSelect => self.handle_remove_select_key(code),
             PendingAction::LanguageSelect => self.handle_language_select_key(code),
-            PendingAction::CreateForceConfirm(index) => {
-                self.handle_confirm_key(code, ConfirmAction::CreateForce(index))
-            }
             PendingAction::RemoveConfirm(index) => {
                 self.handle_confirm_key(code, ConfirmAction::Remove(index))
             }
         }
-    }
-
-    fn handle_create_select_key(&mut self, code: KeyCode) -> Result<bool> {
-        match code {
-            KeyCode::Esc => {
-                self.pending = None;
-                self.create_candidates.clear();
-                self.create_selected = 0;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.create_selected = self.create_selected.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.create_candidates.is_empty() {
-                    self.create_selected =
-                        (self.create_selected + 1).min(self.create_candidates.len() - 1);
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(index) = self.create_candidates.get(self.create_selected).copied() {
-                    self.pending = Some(PendingAction::CreateForceConfirm(index));
-                    self.confirm_action = Some(ConfirmAction::CreateForce(index));
-                    self.confirm_selected = 1;
-                }
-            }
-            _ => {}
-        }
-        Ok(false)
     }
 
     fn handle_open_select_key(&mut self, code: KeyCode) -> Result<bool> {
@@ -296,7 +287,6 @@ impl AppState {
                 self.confirm_action = None;
                 self.pending = None;
                 self.confirm_selected = 1;
-                self.create_candidates.clear();
                 self.open_candidates.clear();
                 self.remove_candidates.clear();
             }
@@ -313,13 +303,12 @@ impl AppState {
                 self.confirm_selected = 1;
 
                 match action {
-                    ConfirmAction::CreateForce(index) => {
-                        self.create_candidates.clear();
-                        self.create_selected = 0;
-                        self.push_result(
-                            self.language.tui_output_create_title(),
-                            app::create_instance(self.language, index, confirmed),
-                        );
+                    ConfirmAction::Create(index) => {
+                        if confirmed {
+                            self.start_create_operation(index, false);
+                        } else {
+                            self.set_notice(self.language.creation_cancelled().to_string());
+                        }
                     }
                     ConfirmAction::Remove(index) => {
                         self.remove_candidates.clear();
@@ -357,14 +346,19 @@ impl AppState {
     }
 
     fn start_create(&mut self) {
-        match app::suggested_available_indices(CREATE_SLOT_COUNT) {
-            Ok(indices) if indices.is_empty() => {
-                self.set_notice(self.language.no_local_copies().to_string());
+        let start_index = match config::load_next_copy_index() {
+            Ok(index) => index,
+            Err(err) => {
+                self.set_error(err.to_string());
+                return;
             }
-            Ok(indices) => {
-                self.create_candidates = indices;
-                self.create_selected = 0;
-                self.pending = Some(PendingAction::CreateSelect);
+        };
+
+        match app::next_available_index_from(start_index) {
+            Ok(index) => {
+                self.confirm_action = Some(ConfirmAction::Create(index));
+                self.confirm_selected = 0;
+                self.pending = Some(PendingAction::CreateConfirm(index));
             }
             Err(err) => self.set_error(err.to_string()),
         }
@@ -428,10 +422,103 @@ impl AppState {
         );
     }
 
+    fn start_create_operation(&mut self, index: u16, force: bool) {
+        let language = self.language;
+        let (sender, receiver) = mpsc::channel();
+        let initial_message = language.tui_progress_starting(index);
+
+        self.running = Some(RunningOperation {
+            receiver,
+            created_index: index,
+            message: initial_message,
+            current: 0,
+            total: 1,
+        });
+
+        thread::spawn(move || {
+            let result = app::create_instance_with_progress(
+                language,
+                index,
+                force,
+                |current, total, message| {
+                    let _ = sender.send(BackgroundEvent::Progress {
+                        message: message.to_string(),
+                        current,
+                        total,
+                    });
+                },
+            )
+            .map_err(|err| err.to_string());
+
+            let _ = sender.send(BackgroundEvent::Finished(result));
+        });
+    }
+
     fn push_result(&mut self, title: &str, result: Result<String>) {
         match result {
             Ok(text) => self.set_success(title.to_string(), text),
             Err(err) => self.set_error(err.to_string()),
+        }
+    }
+
+    fn poll_background(&mut self) {
+        let mut finished = None;
+        let mut disconnected = false;
+        let mut created_index = None;
+
+        if let Some(running) = self.running.as_mut() {
+            loop {
+                match running.receiver.try_recv() {
+                    Ok(BackgroundEvent::Progress {
+                        message,
+                        current,
+                        total,
+                    }) => {
+                        running.message = message;
+                        running.current = current;
+                        running.total = total.max(1);
+                    }
+                    Ok(BackgroundEvent::Finished(result)) => {
+                        created_index = Some(running.created_index);
+                        finished = Some(result);
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if disconnected {
+            self.running = None;
+            self.set_error(self.language.tui_background_disconnected().to_string());
+            return;
+        }
+
+        if let Some(result) = finished {
+            self.running = None;
+            match result {
+                Ok(mut text) => {
+                    if let Some(created_index) = created_index {
+                        let next_index =
+                            app::next_available_index_from(created_index.saturating_add(1).max(2));
+                        match next_index.and_then(config::save_next_copy_index) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                text.push_str("\n\n");
+                                text.push_str(
+                                    &self.language.tui_next_index_save_failed(&err.to_string()),
+                                );
+                            }
+                        }
+                    }
+                    self.set_success(self.language.tui_output_create_title().to_string(), text)
+                }
+                Err(err) => self.set_error(err),
+            }
         }
     }
 
@@ -536,18 +623,24 @@ fn draw(frame: &mut Frame, app: &AppState) {
 
     if let Some(pending) = app.pending {
         draw_modal(frame, area, app, pending);
+    } else if app.running.is_some() {
+        draw_progress_modal(frame, area, app);
     }
 }
 
 fn draw_modal(frame: &mut Frame, area: Rect, app: &AppState, pending: PendingAction) {
     match pending {
-        PendingAction::CreateSelect => draw_create_select_modal(frame, area, app),
+        PendingAction::CreateConfirm(index) => draw_confirm_modal(
+            frame,
+            area,
+            app,
+            &app.language
+                .tui_create_prompt(&app::app_path(index).display().to_string()),
+            None,
+        ),
         PendingAction::OpenSelect => draw_open_select_modal(frame, area, app),
         PendingAction::RemoveSelect => draw_remove_select_modal(frame, area, app),
         PendingAction::LanguageSelect => draw_language_select_modal(frame, area, app),
-        PendingAction::CreateForceConfirm(index) => {
-            draw_confirm_modal(frame, area, app, app.language.create_force(), Some(index))
-        }
         PendingAction::RemoveConfirm(index) => draw_confirm_modal(
             frame,
             area,
@@ -590,41 +683,6 @@ fn draw_language_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
         &mut state,
     );
     frame.render_widget(Paragraph::new(app.language.tui_language_help()), chunks[1]);
-}
-
-fn draw_create_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
-    let popup = centered_rect(60, 40, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(app.language.tui_create_title())
-        .borders(Borders::ALL);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(inner);
-
-    let items = app
-        .create_candidates
-        .iter()
-        .map(|index| ListItem::new(format!("WeChat{index}.app")))
-        .collect::<Vec<_>>();
-    let mut state = ListState::default();
-    state.select(Some(app.create_selected));
-    frame.render_stateful_widget(
-        List::new(items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .highlight_symbol("> "),
-        chunks[0],
-        &mut state,
-    );
-    frame.render_widget(
-        Paragraph::new(app.language.tui_create_select_help()),
-        chunks[1],
-    );
 }
 
 fn draw_open_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
@@ -771,6 +829,55 @@ fn draw_confirm_modal(
         choice_chunks[1],
     );
     frame.render_widget(Paragraph::new(app.language.tui_confirm_help()), chunks[2]);
+}
+
+fn draw_progress_modal(frame: &mut Frame, area: Rect, app: &AppState) {
+    let Some(running) = app.running.as_ref() else {
+        return;
+    };
+
+    let popup = centered_rect(60, 26, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(app.language.tui_progress_title())
+        .borders(Borders::ALL);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(running.message.as_str()).wrap(Wrap { trim: true }),
+        chunks[0],
+    );
+
+    let ratio = if running.total == 0 {
+        0.0
+    } else {
+        running.current as f64 / running.total as f64
+    };
+    let label = format!("{}/{}", running.current.min(running.total), running.total);
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::default().borders(Borders::ALL))
+            .gauge_style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .ratio(ratio.clamp(0.0, 1.0))
+            .label(label),
+        chunks[1],
+    );
+
+    frame.render_widget(Paragraph::new(app.language.tui_progress_help()), chunks[2]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

@@ -23,7 +23,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let saved_language = config::load_config()?.map(|config| config.language);
+    let saved_language = config::load_config()?.and_then(|config| config.language);
     let language = cli.lang.or(saved_language).unwrap_or(Language::Zh);
     let should_prompt_for_language = cli.lang.is_none() && saved_language.is_none();
 
