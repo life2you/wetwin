@@ -30,7 +30,7 @@ When an operation inside `/Applications` needs elevated privileges, `wetwin` fir
 
 ```bash
 brew tap life2you/tap
-brew install wetwin
+brew install life2you/tap/wetwin
 ```
 
 ### Build from source
