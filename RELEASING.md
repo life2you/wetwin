@@ -1,3 +1,5 @@
+[English](RELEASING.md) | [简体中文](RELEASING.zh-CN.md)
+
 # Releasing `wetwin`
 
 This document is the maintainer SOP for publishing a new `wetwin` release with prebuilt macOS binaries and updating Homebrew.
