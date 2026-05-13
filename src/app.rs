@@ -110,7 +110,7 @@ where
 
     let source_str = source.display().to_string();
     let target_str = target.display().to_string();
-    let total_steps = if target_exists && force { 7 } else { 6 };
+    let total_steps = if target_exists && force { 8 } else { 7 };
     let mut current_step = 0usize;
 
     if target_exists && force {
@@ -153,6 +153,19 @@ where
     report(current_step, total_steps, &update_bundle_id_message);
     lines.push(update_bundle_id_message);
     plist::set_bundle_identifier(&target_plist, &bundle_id)?;
+
+    let nested_bundle_update_message = language.updating_nested_bundle_ids().to_string();
+    current_step += 1;
+    report(current_step, total_steps, &nested_bundle_update_message);
+    lines.push(nested_bundle_update_message);
+    let nested_plists = plist::nested_bundle_plists(&target)?;
+    for nested_plist in &nested_plists {
+        let original_nested_bundle_id = plist::bundle_identifier(nested_plist)?;
+        let nested_bundle_id =
+            nested_bundle_identifier(&bundle_id, &original_nested_bundle_id, nested_plist);
+        plist::set_bundle_identifier(nested_plist, &nested_bundle_id)?;
+    }
+    lines.push(language.nested_bundle_ids_updated(nested_plists.len()));
 
     let copy_prefs_message = language.copying_preferences().to_string();
     current_step += 1;
@@ -410,4 +423,25 @@ fn parse_copy_name(name: &str) -> Option<u16> {
 
 fn same_as_original(path: &Path) -> bool {
     path == Path::new(ORIGINAL_APP_PATH)
+}
+
+fn nested_bundle_identifier(target_bundle_id: &str, original_nested_bundle_id: &str, plist_path: &Path) -> String {
+    let original_root_bundle_id = BUNDLE_PREFIX;
+    if let Some(suffix) = original_nested_bundle_id.strip_prefix(&format!("{original_root_bundle_id}.")) {
+        return format!("{target_bundle_id}.{suffix}");
+    }
+
+    if let Some(last_segment) = original_nested_bundle_id.rsplit('.').next() {
+        if !last_segment.is_empty() {
+            return format!("{target_bundle_id}.{last_segment}");
+        }
+    }
+
+    let bundle_name = plist_path
+        .parent()
+        .and_then(|contents| contents.parent())
+        .and_then(|bundle_dir| bundle_dir.file_stem())
+        .and_then(|value| value.to_str())
+        .unwrap_or("NestedBundle");
+    format!("{target_bundle_id}.{bundle_name}")
 }

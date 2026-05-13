@@ -265,6 +265,20 @@ impl Language {
         }
     }
 
+    pub fn updating_nested_bundle_ids(self) -> &'static str {
+        match self {
+            Self::En => "Updating nested app and extension Bundle Identifiers",
+            Self::Zh => "正在更新内部 app 与扩展组件的 Bundle ID",
+        }
+    }
+
+    pub fn nested_bundle_ids_updated(self, count: usize) -> String {
+        match self {
+            Self::En => format!("Updated Bundle Identifiers for {count} nested app components."),
+            Self::Zh => format!("已更新 {count} 个内部 app / 扩展组件的 Bundle ID。"),
+        }
+    }
+
     pub fn copying_preferences(self) -> &'static str {
         match self {
             Self::En => "Copying original WeChat preferences",
