@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod doctor;
 mod error;
+mod icon;
 mod lang;
 mod plist;
 mod prefs;

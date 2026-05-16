@@ -41,10 +41,12 @@ git push origin v<version>
 
 4. 等待 GitHub Actions 的 `release` workflow 跑完。
 
-GitHub Release 中应该出现这两个资源文件：
+GitHub Release 中应该出现这些资源文件：
 
 - `wetwin-aarch64-apple-darwin.tar.gz`
 - `wetwin-x86_64-apple-darwin.tar.gz`
+- `wetwin-aarch64.pkg`
+- `wetwin-x86_64.pkg`
 
 如果 workflow 没有自动触发，就手动以 `v<version>` 为 tag 触发一次。
 
@@ -90,3 +92,4 @@ brew info life2you/tap/wetwin
 
 - 不要在 release 资源生成之前更新 tap 公式。
 - 现在的 Homebrew 安装走的是预编译二进制，终端用户机器上不需要再安装 Rust。
+- `.pkg` 安装包会把 `wetwin` 安装到 `/usr/local/bin/wetwin`，Apple Silicon 和 Intel 都使用同一个安装路径。

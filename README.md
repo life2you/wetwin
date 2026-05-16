@@ -33,6 +33,34 @@ brew tap life2you/tap
 brew install life2you/tap/wetwin
 ```
 
+### Direct Download (.pkg)
+
+For users who prefer a click-through installer, each GitHub Release also includes two macOS installer packages:
+
+- `wetwin-aarch64.pkg` for Apple Silicon Macs
+- `wetwin-x86_64.pkg` for Intel Macs
+
+Double-click the matching `.pkg` file and macOS will install `wetwin` to:
+
+```bash
+/usr/local/bin/wetwin
+```
+
+To confirm your Mac chip:
+
+```bash
+uname -m
+```
+
+- `arm64` means Apple Silicon
+- `x86_64` means Intel
+
+To uninstall a `.pkg` install:
+
+```bash
+sudo rm -f /usr/local/bin/wetwin
+```
+
 Maintainer release steps live in [RELEASING.md](/Users/life2you/vibeCodes/github/wetwin/RELEASING.md).
 
 ### Build from source

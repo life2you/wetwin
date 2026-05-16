@@ -279,6 +279,43 @@ impl Language {
         }
     }
 
+    pub fn updating_app_name(self, display_name: &str) -> String {
+        match self {
+            Self::En => format!("Updating app display name to {display_name}"),
+            Self::Zh => format!("正在更新应用名称为 {display_name}"),
+        }
+    }
+
+    pub fn app_name_updated(self, display_name: &str) -> String {
+        match self {
+            Self::En => format!("App display name updated to {display_name}."),
+            Self::Zh => format!("应用名称已更新为 {display_name}。"),
+        }
+    }
+
+    pub fn localized_app_names_updated(self, count: usize) -> String {
+        match self {
+            Self::En => {
+                format!("Updated localized app names in {count} InfoPlist.strings file(s).")
+            }
+            Self::Zh => format!("已更新 {count} 个 InfoPlist.strings 本地化名称。"),
+        }
+    }
+
+    pub fn applying_icon(self, description: &str) -> String {
+        match self {
+            Self::En => format!("Applying icon: {description}"),
+            Self::Zh => format!("正在应用图标：{description}"),
+        }
+    }
+
+    pub fn icon_applied(self) -> &'static str {
+        match self {
+            Self::En => "Icon applied.",
+            Self::Zh => "图标已应用。",
+        }
+    }
+
     pub fn copying_preferences(self) -> &'static str {
         match self {
             Self::En => "Copying original WeChat preferences",
@@ -367,6 +404,48 @@ impl Language {
         match self {
             Self::En => "Created successfully:",
             Self::Zh => "创建成功：",
+        }
+    }
+
+    pub fn refuse_overwrite_original(self) -> &'static str {
+        match self {
+            Self::En => "Refusing to overwrite the original WeChat.app.",
+            Self::Zh => "拒绝覆盖原版 WeChat.app。",
+        }
+    }
+
+    pub fn icon_custom_source_not_found(self, path: &str) -> String {
+        match self {
+            Self::En => format!("Custom icon image not found: {path}"),
+            Self::Zh => format!("未找到自定义图标图片：{path}"),
+        }
+    }
+
+    pub fn icon_generate_failed(self, path: &str) -> String {
+        match self {
+            Self::En => format!("Failed to generate icon images from {path}."),
+            Self::Zh => format!("无法从 {path} 生成图标文件。"),
+        }
+    }
+
+    pub fn icon_pack_failed(self, path: &str) -> String {
+        match self {
+            Self::En => format!("Failed to package an .icns icon at {path}."),
+            Self::Zh => format!("无法打包 .icns 图标：{path}。"),
+        }
+    }
+
+    pub fn icon_install_failed(self, path: &str) -> String {
+        match self {
+            Self::En => format!("Failed to install the icon into {path}."),
+            Self::Zh => format!("无法将图标写入 {path}。"),
+        }
+    }
+
+    pub fn icon_preset_render_failed(self, preset: &str) -> String {
+        match self {
+            Self::En => format!("Failed to render the preset icon: {preset}."),
+            Self::Zh => format!("无法渲染预设图标：{preset}。"),
         }
     }
 
@@ -535,6 +614,20 @@ impl Language {
         match self {
             Self::En => "Required to launch app bundles.",
             Self::Zh => "用于启动应用。",
+        }
+    }
+
+    pub fn doctor_sips_note(self) -> &'static str {
+        match self {
+            Self::En => "Used to resize custom icon images.",
+            Self::Zh => "用于缩放自定义图标图片。",
+        }
+    }
+
+    pub fn doctor_iconutil_note(self) -> &'static str {
+        match self {
+            Self::En => "Used to package iconset folders into .icns files.",
+            Self::Zh => "用于把 iconset 打包成 .icns 文件。",
         }
     }
 
@@ -768,6 +861,78 @@ impl Language {
         }
     }
 
+    pub fn tui_create_name_title(self) -> &'static str {
+        match self {
+            Self::En => "Copy Name",
+            Self::Zh => "副本名称",
+        }
+    }
+
+    pub fn tui_create_name_prompt(self, default_name: &str) -> String {
+        match self {
+            Self::En => format!("Enter a copy name. Leave blank to use {default_name}"),
+            Self::Zh => format!("请输入副本名称，留空则使用 {default_name}"),
+        }
+    }
+
+    pub fn tui_create_name_help(self) -> &'static str {
+        match self {
+            Self::En => "Type a name, Backspace deletes, Enter continues, Esc cancels",
+            Self::Zh => "直接输入名称，Backspace 删除，回车继续，Esc 取消",
+        }
+    }
+
+    pub fn tui_create_icon_source_title(self) -> &'static str {
+        match self {
+            Self::En => "Choose Icon",
+            Self::Zh => "选择图标",
+        }
+    }
+
+    pub fn tui_create_icon_source_items(self) -> [&'static str; 2] {
+        match self {
+            Self::En => ["Keep the original WeChat icon", "Use a preset badge icon"],
+            Self::Zh => ["沿用原版微信图标", "使用预设角标图标"],
+        }
+    }
+
+    pub fn tui_create_icon_source_help(self) -> &'static str {
+        match self {
+            Self::En => "Use Up/Down to choose the icon source, Enter to continue, Esc to cancel",
+            Self::Zh => "使用上下键选择图标来源，回车继续，Esc 取消",
+        }
+    }
+
+    pub fn tui_create_preset_title(self) -> &'static str {
+        match self {
+            Self::En => "Preset Icons",
+            Self::Zh => "预设图标",
+        }
+    }
+
+    pub fn tui_create_preset_help(self) -> &'static str {
+        match self {
+            Self::En => "Use Up/Down to choose a preset icon, Enter to continue, Esc to go back",
+            Self::Zh => "使用上下键选择预设图标，回车继续，Esc 返回",
+        }
+    }
+
+    pub fn tui_create_summary(
+        self,
+        path: &str,
+        display_name: &str,
+        icon_description: &str,
+    ) -> String {
+        match self {
+            Self::En => format!(
+                "Create this WeChat copy now?\nPath: {path}\nDisplay name: {display_name}\nIcon: {icon_description}"
+            ),
+            Self::Zh => format!(
+                "确认立即创建这个微信副本吗？\n路径：{path}\n名称：{display_name}\n图标：{icon_description}"
+            ),
+        }
+    }
+
     pub fn tui_open_select_help(self) -> &'static str {
         match self {
             Self::En => "Use Up/Down to choose a copy, Enter to open, Esc to cancel",
@@ -824,10 +989,10 @@ impl Language {
         }
     }
 
-    pub fn tui_progress_starting(self, index: u16) -> String {
+    pub fn tui_progress_starting(self, app_name: &str) -> String {
         match self {
-            Self::En => format!("Preparing WeChat{index}.app"),
-            Self::Zh => format!("正在准备 WeChat{index}.app"),
+            Self::En => format!("Preparing {app_name}"),
+            Self::Zh => format!("正在准备 {app_name}"),
         }
     }
 

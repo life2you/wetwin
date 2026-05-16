@@ -1,4 +1,9 @@
-use crate::{app, config, doctor, lang::Language};
+use crate::{
+    app::{self, CreateOptions},
+    config, doctor,
+    icon::{IconPreset, IconSource},
+    lang::Language,
+};
 use anyhow::{anyhow, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -14,6 +19,7 @@ use ratatui::{
     DefaultTerminal,
 };
 use std::io::{self, IsTerminal};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -22,7 +28,10 @@ const MENU_LEN: usize = 8;
 
 #[derive(Clone, Copy)]
 enum PendingAction {
-    CreateConfirm(u16),
+    CreateNameInput,
+    CreateIconSourceSelect,
+    CreatePresetSelect,
+    CreateConfirm,
     OpenSelect,
     RemoveSelect,
     LanguageSelect,
@@ -31,8 +40,21 @@ enum PendingAction {
 
 #[derive(Clone, Copy)]
 enum ConfirmAction {
-    Create(u16),
+    Create,
     Remove(u16),
+}
+
+#[derive(Clone, Copy)]
+enum CreateIconChoice {
+    Default,
+    Preset(IconPreset),
+}
+
+#[derive(Clone)]
+struct CreateDraft {
+    index: u16,
+    custom_name: String,
+    icon_choice: CreateIconChoice,
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +136,9 @@ struct AppState {
     confirm_action: Option<ConfirmAction>,
     confirm_selected: usize,
     language_selected: usize,
+    create_draft: Option<CreateDraft>,
+    create_icon_source_selected: usize,
+    create_preset_selected: usize,
     running: Option<RunningOperation>,
 }
 
@@ -141,6 +166,9 @@ impl AppState {
             } else {
                 1
             },
+            create_draft: None,
+            create_icon_source_selected: 0,
+            create_preset_selected: 0,
             running: None,
         }
     }
@@ -176,9 +204,10 @@ impl AppState {
 
     fn handle_pending_key(&mut self, code: KeyCode, pending: PendingAction) -> Result<bool> {
         match pending {
-            PendingAction::CreateConfirm(index) => {
-                self.handle_confirm_key(code, ConfirmAction::Create(index))
-            }
+            PendingAction::CreateNameInput => self.handle_create_name_key(code),
+            PendingAction::CreateIconSourceSelect => self.handle_create_icon_source_key(code),
+            PendingAction::CreatePresetSelect => self.handle_create_preset_key(code),
+            PendingAction::CreateConfirm => self.handle_confirm_key(code, ConfirmAction::Create),
             PendingAction::OpenSelect => self.handle_open_select_key(code),
             PendingAction::RemoveSelect => self.handle_remove_select_key(code),
             PendingAction::LanguageSelect => self.handle_language_select_key(code),
@@ -186,6 +215,89 @@ impl AppState {
                 self.handle_confirm_key(code, ConfirmAction::Remove(index))
             }
         }
+    }
+
+    fn handle_create_name_key(&mut self, code: KeyCode) -> Result<bool> {
+        match code {
+            KeyCode::Esc => self.cancel_create(),
+            KeyCode::Backspace => {
+                if let Some(draft) = self.create_draft.as_mut() {
+                    draft.custom_name.pop();
+                }
+            }
+            KeyCode::Enter => {
+                self.create_icon_source_selected = 0;
+                self.pending = Some(PendingAction::CreateIconSourceSelect);
+            }
+            KeyCode::Char(ch) => {
+                if let Some(draft) = self.create_draft.as_mut() {
+                    draft.custom_name.push(ch);
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_create_icon_source_key(&mut self, code: KeyCode) -> Result<bool> {
+        match code {
+            KeyCode::Esc => {
+                self.pending = Some(PendingAction::CreateNameInput);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.create_icon_source_selected =
+                    self.create_icon_source_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.create_icon_source_selected = (self.create_icon_source_selected + 1).min(1);
+            }
+            KeyCode::Enter => match self.create_icon_source_selected {
+                0 => {
+                    if let Some(draft) = self.create_draft.as_mut() {
+                        draft.icon_choice = CreateIconChoice::Default;
+                    }
+                    self.confirm_action = Some(ConfirmAction::Create);
+                    self.confirm_selected = 0;
+                    self.pending = Some(PendingAction::CreateConfirm);
+                }
+                1 => {
+                    self.create_preset_selected = 0;
+                    self.pending = Some(PendingAction::CreatePresetSelect);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_create_preset_key(&mut self, code: KeyCode) -> Result<bool> {
+        match code {
+            KeyCode::Esc => {
+                self.pending = Some(PendingAction::CreateIconSourceSelect);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.create_preset_selected = self.create_preset_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !IconPreset::all().is_empty() {
+                    self.create_preset_selected =
+                        (self.create_preset_selected + 1).min(IconPreset::all().len() - 1);
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(preset) = IconPreset::all().get(self.create_preset_selected).copied() {
+                    if let Some(draft) = self.create_draft.as_mut() {
+                        draft.icon_choice = CreateIconChoice::Preset(preset);
+                    }
+                    self.confirm_action = Some(ConfirmAction::Create);
+                    self.confirm_selected = 0;
+                    self.pending = Some(PendingAction::CreateConfirm);
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
     }
 
     fn handle_open_select_key(&mut self, code: KeyCode) -> Result<bool> {
@@ -303,10 +415,14 @@ impl AppState {
                 self.confirm_selected = 1;
 
                 match action {
-                    ConfirmAction::Create(index) => {
+                    ConfirmAction::Create => {
                         if confirmed {
-                            self.start_create_operation(index, false);
+                            match self.build_create_options() {
+                                Ok(options) => self.start_create_operation(options),
+                                Err(err) => self.set_error(err.to_string()),
+                            }
                         } else {
+                            self.create_draft = None;
                             self.set_notice(self.language.creation_cancelled().to_string());
                         }
                     }
@@ -356,9 +472,12 @@ impl AppState {
 
         match app::next_available_index_from(start_index) {
             Ok(index) => {
-                self.confirm_action = Some(ConfirmAction::Create(index));
-                self.confirm_selected = 0;
-                self.pending = Some(PendingAction::CreateConfirm(index));
+                self.create_draft = Some(CreateDraft {
+                    index,
+                    custom_name: String::new(),
+                    icon_choice: CreateIconChoice::Default,
+                });
+                self.pending = Some(PendingAction::CreateNameInput);
             }
             Err(err) => self.set_error(err.to_string()),
         }
@@ -422,36 +541,67 @@ impl AppState {
         );
     }
 
-    fn start_create_operation(&mut self, index: u16, force: bool) {
+    fn start_create_operation(&mut self, options: CreateOptions) {
         let language = self.language;
         let (sender, receiver) = mpsc::channel();
-        let initial_message = language.tui_progress_starting(index);
+        let target_name = options
+            .target_path()
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| app::default_copy_app_name(options.index));
+        let initial_message = language.tui_progress_starting(&target_name);
 
         self.running = Some(RunningOperation {
             receiver,
-            created_index: index,
+            created_index: options.index,
             message: initial_message,
             current: 0,
             total: 1,
         });
 
         thread::spawn(move || {
-            let result = app::create_instance_with_progress(
-                language,
-                index,
-                force,
-                |current, total, message| {
+            let result =
+                app::create_instance_with_progress(language, options, |current, total, message| {
                     let _ = sender.send(BackgroundEvent::Progress {
                         message: message.to_string(),
                         current,
                         total,
                     });
-                },
-            )
-            .map_err(|err| err.to_string());
+                })
+                .map_err(|err| err.to_string());
 
             let _ = sender.send(BackgroundEvent::Finished(result));
         });
+    }
+
+    fn cancel_create(&mut self) {
+        self.pending = None;
+        self.confirm_action = None;
+        self.confirm_selected = 1;
+        self.create_draft = None;
+        self.set_notice(self.language.creation_cancelled().to_string());
+    }
+
+    fn build_create_options(&self) -> Result<CreateOptions> {
+        let Some(draft) = self.create_draft.as_ref() else {
+            return Err(anyhow!("No pending create draft."));
+        };
+
+        let icon = match draft.icon_choice {
+            CreateIconChoice::Default => IconSource::Default,
+            CreateIconChoice::Preset(preset) => IconSource::Preset(preset),
+        };
+
+        Ok(CreateOptions {
+            index: draft.index,
+            force: false,
+            app_name: non_empty_string(&draft.custom_name),
+            icon,
+        })
     }
 
     fn push_result(&mut self, title: &str, result: Result<String>) {
@@ -500,6 +650,7 @@ impl AppState {
 
         if let Some(result) = finished {
             self.running = None;
+            self.create_draft = None;
             match result {
                 Ok(mut text) => {
                     if let Some(created_index) = created_index {
@@ -547,6 +698,48 @@ impl AppState {
         {
             self.output = self.language.tui_welcome().to_string();
         }
+    }
+}
+
+fn create_summary(app: &AppState) -> Option<String> {
+    let draft = app.create_draft.as_ref()?;
+    let options = app.build_create_options().ok();
+    let path = options
+        .as_ref()
+        .and_then(|value| value.target_path().ok())
+        .unwrap_or_else(|| {
+            let typed_name = non_empty_string(&draft.custom_name)
+                .unwrap_or_else(|| app::default_copy_app_name(draft.index));
+            PathBuf::from(app::APPLICATIONS_DIR).join(typed_name)
+        });
+    let fallback_display_name = non_empty_string(&draft.custom_name)
+        .unwrap_or_else(|| app::default_copy_app_name(draft.index))
+        .trim_end_matches(".app")
+        .to_string();
+    let display_name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(fallback_display_name.as_str());
+    let icon_description = options
+        .as_ref()
+        .map(|value| value.icon.describe(app.language))
+        .unwrap_or_else(|| match draft.icon_choice {
+            CreateIconChoice::Default => IconSource::Default.describe(app.language),
+            CreateIconChoice::Preset(preset) => IconSource::Preset(preset).describe(app.language),
+        });
+    Some(app.language.tui_create_summary(
+        &path.display().to_string(),
+        display_name,
+        &icon_description,
+    ))
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -630,26 +823,142 @@ fn draw(frame: &mut Frame, app: &AppState) {
 
 fn draw_modal(frame: &mut Frame, area: Rect, app: &AppState, pending: PendingAction) {
     match pending {
-        PendingAction::CreateConfirm(index) => draw_confirm_modal(
-            frame,
-            area,
-            app,
-            &app.language
-                .tui_create_prompt(&app::app_path(index).display().to_string()),
-            None,
-        ),
+        PendingAction::CreateNameInput => draw_create_name_modal(frame, area, app),
+        PendingAction::CreateIconSourceSelect => draw_create_icon_source_modal(frame, area, app),
+        PendingAction::CreatePresetSelect => draw_create_preset_modal(frame, area, app),
+        PendingAction::CreateConfirm => draw_create_confirm_modal(frame, area, app),
         PendingAction::OpenSelect => draw_open_select_modal(frame, area, app),
         PendingAction::RemoveSelect => draw_remove_select_modal(frame, area, app),
         PendingAction::LanguageSelect => draw_language_select_modal(frame, area, app),
-        PendingAction::RemoveConfirm(index) => draw_confirm_modal(
-            frame,
-            area,
-            app,
-            &app.language
-                .removal_prompt(&app::app_path(index).display().to_string()),
-            None,
-        ),
+        PendingAction::RemoveConfirm(index) => {
+            let path = app
+                .remove_candidates
+                .iter()
+                .find(|instance| instance.index == index)
+                .map(|instance| instance.path.display().to_string())
+                .unwrap_or_else(|| app::app_path(index).display().to_string());
+            draw_confirm_modal(frame, area, app, &app.language.removal_prompt(&path), None)
+        }
     }
+}
+
+fn draw_create_name_modal(frame: &mut Frame, area: Rect, app: &AppState) {
+    let popup = centered_rect(60, 24, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(app.language.tui_create_name_title())
+        .borders(Borders::ALL);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let Some(draft) = app.create_draft.as_ref() else {
+        return;
+    };
+
+    let default_name = app::default_copy_app_name(draft.index);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(app.language.tui_create_name_prompt(&default_name))
+            .wrap(Wrap { trim: true }),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(draft.custom_name.as_str()).block(
+            Block::default()
+                .title(app.language.tui_input())
+                .borders(Borders::ALL),
+        ),
+        chunks[1],
+    );
+    frame.render_widget(
+        Paragraph::new(app.language.tui_create_name_help()),
+        chunks[2],
+    );
+}
+
+fn draw_create_icon_source_modal(frame: &mut Frame, area: Rect, app: &AppState) {
+    let popup = centered_rect(60, 34, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(app.language.tui_create_icon_source_title())
+        .borders(Borders::ALL);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+
+    let items = app
+        .language
+        .tui_create_icon_source_items()
+        .into_iter()
+        .map(ListItem::new)
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    state.select(Some(app.create_icon_source_selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("> "),
+        chunks[0],
+        &mut state,
+    );
+    frame.render_widget(
+        Paragraph::new(app.language.tui_create_icon_source_help()),
+        chunks[1],
+    );
+}
+
+fn draw_create_preset_modal(frame: &mut Frame, area: Rect, app: &AppState) {
+    let popup = centered_rect(60, 38, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(app.language.tui_create_preset_title())
+        .borders(Borders::ALL);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+
+    let items = IconPreset::all()
+        .iter()
+        .map(|preset| ListItem::new(preset.label(app.language)))
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    state.select(Some(app.create_preset_selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("> "),
+        chunks[0],
+        &mut state,
+    );
+    frame.render_widget(
+        Paragraph::new(app.language.tui_create_preset_help()),
+        chunks[1],
+    );
+}
+
+fn draw_create_confirm_modal(frame: &mut Frame, area: Rect, app: &AppState) {
+    let Some(summary) = create_summary(app) else {
+        return;
+    };
+    draw_confirm_modal(frame, area, app, &summary, None);
 }
 
 fn draw_language_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
@@ -704,8 +1013,9 @@ fn draw_open_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
         .iter()
         .map(|instance| {
             ListItem::new(format!(
-                "WeChat{}  {}",
+                "[{}] {}  {}",
                 instance.index,
+                instance.app_name,
                 instance.path.display()
             ))
         })
@@ -745,8 +1055,9 @@ fn draw_remove_select_modal(frame: &mut Frame, area: Rect, app: &AppState) {
         .iter()
         .map(|instance| {
             ListItem::new(format!(
-                "WeChat{}  {}",
+                "[{}] {}  {}",
                 instance.index,
+                instance.app_name,
                 instance.path.display()
             ))
         })

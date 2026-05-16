@@ -18,6 +18,7 @@ env:
   BINARY_NAME: wetwin
   ASSET_BASENAME: wetwin
   FORMULA_FILENAME: wetwin.rb
+  PKG_INSTALL_PREFIX: /usr/local/bin
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
@@ -28,8 +29,10 @@ jobs:
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
+            pkg_name: wetwin-aarch64.pkg
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            pkg_name: wetwin-x86_64.pkg
 
     runs-on: ${{ matrix.runner }}
 
@@ -55,6 +58,15 @@ jobs:
           tar -C dist -czf "$asset_name" "$BINARY_NAME"
           mkdir -p release-assets
           mv "$asset_name" "release-assets/$asset_name"
+
+      - name: Build installer package
+        run: |
+          version="${RELEASE_TAG#v}"
+          ./scripts/build-macos-pkg.sh \
+            --binary-path "target/${{ matrix.target }}/release/${BINARY_NAME}" \
+            --output "release-assets/${{ matrix.pkg_name }}" \
+            --version "$version" \
+            --install-prefix "$PKG_INSTALL_PREFIX"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

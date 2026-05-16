@@ -1,4 +1,4 @@
-use crate::{app, lang::Language, plist};
+use crate::{app, icon, lang::Language, plist};
 use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
@@ -60,6 +60,18 @@ pub fn run(language: Language) -> Result<String> {
         "osascript",
         language.doctor_osascript_note(),
     );
+    print_path_exists(
+        &mut lines,
+        language,
+        icon::sips_path(),
+        language.doctor_sips_note(),
+    );
+    print_path_exists(
+        &mut lines,
+        language,
+        icon::iconutil_path(),
+        language.doctor_iconutil_note(),
+    );
 
     let can_write_applications = command_success("test", &["-w", app::APPLICATIONS_DIR]);
     print_check(
@@ -106,6 +118,16 @@ fn print_command_exists(lines: &mut Vec<String>, language: Language, command: &s
         language,
         &language.doctor_command_available(command),
         ok,
+        Some(note),
+    );
+}
+
+fn print_path_exists(lines: &mut Vec<String>, language: Language, path: &str, note: &str) {
+    print_check(
+        lines,
+        language,
+        &language.doctor_command_available(path),
+        Path::new(path).exists(),
         Some(note),
     );
 }

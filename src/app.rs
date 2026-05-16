@@ -1,4 +1,9 @@
-use crate::{error, lang::Language, plist, prefs, sign};
+use crate::{
+    error,
+    icon::{self, IconSource},
+    lang::Language,
+    plist, prefs, sign,
+};
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +18,30 @@ pub struct AppInstance {
     pub index: u16,
     pub path: PathBuf,
     pub bundle_id: Option<String>,
+    pub app_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateOptions {
+    pub index: u16,
+    pub force: bool,
+    pub app_name: Option<String>,
+    pub icon: IconSource,
+}
+
+impl CreateOptions {
+    pub fn default(index: u16) -> Self {
+        Self {
+            index,
+            force: false,
+            app_name: None,
+            icon: IconSource::Default,
+        }
+    }
+
+    pub fn target_path(&self) -> Result<PathBuf> {
+        target_app_path(self.index, self.app_name.as_deref())
+    }
 }
 
 pub fn ensure_supported_platform(language: Language) -> Result<()> {
@@ -60,11 +89,8 @@ pub fn list_instances(language: Language) -> Result<String> {
     }
 
     for instance in copies {
-        lines.push(format!(
-            "  [{}] {}",
-            instance.index,
-            instance.path.display()
-        ));
+        lines.push(format!("  [{}] {}", instance.index, instance.app_name));
+        lines.push(format!("      {}", instance.path.display()));
         lines.push(format!(
             "      {}: {}",
             language.bundle_id_label(),
@@ -79,41 +105,51 @@ pub fn list_instances(language: Language) -> Result<String> {
 
 #[allow(dead_code)]
 pub fn create_instance(language: Language, index: u16, force: bool) -> Result<String> {
-    create_instance_with_progress(language, index, force, |_, _, _| {})
+    let mut options = CreateOptions::default(index);
+    options.force = force;
+    create_instance_with_progress(language, options, |_, _, _| {})
 }
 
 pub fn create_instance_with_progress<F>(
     language: Language,
-    index: u16,
-    force: bool,
+    options: CreateOptions,
     mut report: F,
 ) -> Result<String>
 where
     F: FnMut(usize, usize, &str),
 {
+    let index = options.index;
     ensure_valid_copy_index(index)?;
     let mut lines = Vec::new();
 
     let source = Path::new(ORIGINAL_APP_PATH);
-    let target = app_path(index);
+    let target = options.target_path()?;
 
     if !source.exists() {
         bail!("{}", language.source_not_found());
     }
 
+    if same_as_original(&target) {
+        bail!("{}", language.refuse_overwrite_original());
+    }
+
     let target_exists = target.exists();
     if target_exists {
-        if !force {
+        if !options.force {
             bail!("{}", language.target_exists(&target.display().to_string()));
         }
     }
 
     let source_str = source.display().to_string();
     let target_str = target.display().to_string();
-    let total_steps = if target_exists && force { 8 } else { 7 };
+    let total_steps = if target_exists && options.force {
+        10
+    } else {
+        9
+    };
     let mut current_step = 0usize;
 
-    if target_exists && force {
+    if target_exists && options.force {
         let removal_message = format!("{} {}", language.removing_existing_copy(), target.display());
         current_step += 1;
         report(current_step, total_steps, &removal_message);
@@ -167,6 +203,27 @@ where
     }
     lines.push(language.nested_bundle_ids_updated(nested_plists.len()));
 
+    let display_name = display_name_for_target(index, options.app_name.as_deref());
+    let update_name_message = language.updating_app_name(&display_name);
+    current_step += 1;
+    report(current_step, total_steps, &update_name_message);
+    lines.push(update_name_message);
+    plist::set_display_name(&target_plist, &display_name)?;
+    let localized_name_updates = plist::set_localized_display_names(&target, &display_name)?;
+    lines.push(language.app_name_updated(&display_name));
+    lines.push(language.localized_app_names_updated(localized_name_updates));
+
+    let icon_message = language.applying_icon(&options.icon.describe(language));
+    current_step += 1;
+    report(current_step, total_steps, &icon_message);
+    lines.push(icon_message);
+    icon::apply_icon(language, &target, index, &options.icon)?;
+    if !matches!(options.icon, IconSource::Default) {
+        plist::set_bundle_icon_file(&target_plist, icon::custom_icon_file_stem())?;
+        plist::delete_key_if_exists(&target_plist, "CFBundleIconName")?;
+    }
+    lines.push(language.icon_applied().to_string());
+
     let copy_prefs_message = language.copying_preferences().to_string();
     current_step += 1;
     report(current_step, total_steps, &copy_prefs_message);
@@ -214,13 +271,13 @@ where
 pub fn open_instance(language: Language, index: u16) -> Result<String> {
     ensure_valid_copy_index(index)?;
 
-    let target = app_path(index);
-    if !target.exists() {
+    let Some(instance) = find_copy_by_index(index)? else {
         bail!(
             "{}",
-            language.app_copy_not_found(&target.display().to_string())
+            language.app_copy_not_found(&app_path(index).display().to_string())
         );
-    }
+    };
+    let target = instance.path;
 
     open_app(&target)?;
     Ok(format!("{} {}", language.opened(), target.display()))
@@ -260,13 +317,13 @@ pub fn open_all(language: Language) -> Result<String> {
 pub fn remove_instance(language: Language, index: u16, confirmed: bool) -> Result<String> {
     ensure_valid_copy_index(index)?;
 
-    let target = app_path(index);
-    if !target.exists() {
+    let Some(instance) = find_copy_by_index(index)? else {
         bail!(
             "{}",
-            language.app_copy_not_found(&target.display().to_string())
+            language.app_copy_not_found(&app_path(index).display().to_string())
         );
-    }
+    };
+    let target = instance.path;
 
     if same_as_original(&target) {
         bail!("{}", language.refuse_remove_original());
@@ -286,7 +343,11 @@ pub fn original_instance() -> Result<Option<AppInstance>> {
         return Ok(None);
     }
 
-    Ok(Some(build_instance(1, path)))
+    Ok(Some(build_instance(
+        1,
+        path,
+        Some(BUNDLE_PREFIX.to_string()),
+    )))
 }
 
 pub fn scan_copies() -> Result<Vec<AppInstance>> {
@@ -302,18 +363,31 @@ pub fn scan_copies() -> Result<Vec<AppInstance>> {
             continue;
         }
 
+        if same_as_original(&path) {
+            continue;
+        }
+
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
 
-        let Some(index) = parse_copy_name(name) else {
+        let bundle_id = plist::bundle_identifier(&plist_path(&path)).ok();
+        let Some(index) = bundle_id
+            .as_deref()
+            .and_then(parse_copy_index_from_bundle_id)
+            .or_else(|| parse_copy_name(name))
+        else {
             continue;
         };
 
-        copies.push(build_instance(index, path));
+        copies.push(build_instance(index, path, bundle_id));
     }
 
-    copies.sort_by_key(|instance| instance.index);
+    copies.sort_by(|left, right| {
+        left.index
+            .cmp(&right.index)
+            .then_with(|| left.app_name.cmp(&right.app_name))
+    });
     Ok(copies)
 }
 
@@ -345,7 +419,19 @@ pub fn next_available_index_from(start_index: u16) -> Result<u16> {
 }
 
 pub fn app_path(index: u16) -> PathBuf {
-    PathBuf::from(format!("{APPLICATIONS_DIR}/WeChat{index}.app"))
+    PathBuf::from(APPLICATIONS_DIR).join(default_copy_app_name(index))
+}
+
+pub fn default_copy_app_name(index: u16) -> String {
+    format!("WeChat{index}.app")
+}
+
+pub fn target_app_path(index: u16, custom_name: Option<&str>) -> Result<PathBuf> {
+    let app_name = match custom_name {
+        Some(name) if !name.trim().is_empty() => normalize_app_name(name)?,
+        _ => default_copy_app_name(index),
+    };
+    Ok(PathBuf::from(APPLICATIONS_DIR).join(app_name))
 }
 
 pub fn plist_path(app_path: &Path) -> PathBuf {
@@ -391,13 +477,24 @@ fn remove_app_at_path(language: Language, path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to remove {}", path.display()))
 }
 
-fn build_instance(index: u16, path: PathBuf) -> AppInstance {
-    let bundle_id = plist::bundle_identifier(&plist_path(&path)).ok();
+fn build_instance(index: u16, path: PathBuf, bundle_id: Option<String>) -> AppInstance {
+    let app_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_string();
     AppInstance {
         index,
         path,
         bundle_id,
+        app_name,
     }
+}
+
+fn find_copy_by_index(index: u16) -> Result<Option<AppInstance>> {
+    Ok(scan_copies()?
+        .into_iter()
+        .find(|instance| instance.index == index))
 }
 
 fn ensure_valid_copy_index(index: u16) -> Result<()> {
@@ -421,13 +518,56 @@ fn parse_copy_name(name: &str) -> Option<u16> {
     Some(index)
 }
 
+fn parse_copy_index_from_bundle_id(bundle_id: &str) -> Option<u16> {
+    let number = bundle_id.strip_prefix(BUNDLE_PREFIX)?;
+    let index = number.parse::<u16>().ok()?;
+    if index < 2 {
+        return None;
+    }
+    Some(index)
+}
+
+fn normalize_app_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        bail!("Copy name cannot be empty.");
+    }
+
+    if trimmed.contains('/') || trimmed.contains('\0') {
+        bail!("Copy name contains unsupported characters.");
+    }
+
+    let without_suffix = trimmed.strip_suffix(".app").unwrap_or(trimmed).trim();
+    if without_suffix.is_empty() {
+        bail!("Copy name cannot be empty.");
+    }
+
+    Ok(format!("{without_suffix}.app"))
+}
+
+fn display_name_for_target(index: u16, custom_name: Option<&str>) -> String {
+    let app_name = custom_name
+        .and_then(|name| normalize_app_name(name).ok())
+        .unwrap_or_else(|| default_copy_app_name(index));
+    app_name
+        .strip_suffix(".app")
+        .unwrap_or(app_name.as_str())
+        .to_string()
+}
+
 fn same_as_original(path: &Path) -> bool {
     path == Path::new(ORIGINAL_APP_PATH)
 }
 
-fn nested_bundle_identifier(target_bundle_id: &str, original_nested_bundle_id: &str, plist_path: &Path) -> String {
+fn nested_bundle_identifier(
+    target_bundle_id: &str,
+    original_nested_bundle_id: &str,
+    plist_path: &Path,
+) -> String {
     let original_root_bundle_id = BUNDLE_PREFIX;
-    if let Some(suffix) = original_nested_bundle_id.strip_prefix(&format!("{original_root_bundle_id}.")) {
+    if let Some(suffix) =
+        original_nested_bundle_id.strip_prefix(&format!("{original_root_bundle_id}."))
+    {
         return format!("{target_bundle_id}.{suffix}");
     }
 

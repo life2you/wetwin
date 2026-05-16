@@ -45,6 +45,8 @@ The workflow should publish these assets to the GitHub Release:
 
 - `wetwin-aarch64-apple-darwin.tar.gz`
 - `wetwin-x86_64-apple-darwin.tar.gz`
+- `wetwin-aarch64.pkg`
+- `wetwin-x86_64.pkg`
 
 If the workflow did not run automatically, trigger it manually with tag `v<version>`.
 
@@ -90,3 +92,4 @@ brew info life2you/tap/wetwin
 
 - Do not update the tap formula before the release assets exist.
 - The Homebrew formula now installs prebuilt binaries, so end users do not need Rust installed locally.
+- The `.pkg` installers place `wetwin` at `/usr/local/bin/wetwin` for both Apple Silicon and Intel Macs.
